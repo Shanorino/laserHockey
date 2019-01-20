@@ -76,24 +76,22 @@ class DDPGFunction:
         w1_s = tf.get_variable('w1_s', [self._o_space.shape[0], 100], trainable=1)
         w1_a = tf.get_variable('w1_a', [self._action_n, 100], trainable=1)
         b1 = tf.get_variable('b1', [1, 100], trainable=1)
-        net = tf.nn.relu(tf.matmul(self.state, w1_s) + tf.matmul(self.action, w1_a) + b1)
-        self.h = tf.layers.dense(net, 1, trainable=1)
+        net = tf.nn.leaky_relu(tf.matmul(self.state, w1_s) + tf.matmul(self.action, w1_a) + b1)
+        self.h = tf.layers.dense(net, 1, activation=None, trainable=1)
         self.output = tf.squeeze(self.h, name='predQ')
         
         
         
     def _build_graph_mu(self):
         self.state = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="state")
-        
-        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.relu, name='l1') #nx100
+        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.leaky_relu, name='l1') #nx100
         self.h = tf.layers.dense(inputs=dense1, units=self._action_n, activation=tf.nn.tanh, name='h') #nx3
         self.output = tf.squeeze(self.h, name='predMu') # nx3
         
     # for actor's policy gradient
-    def add_grads(self, e_params, ): 
+    def add_grads(self, e_params, a_grads): 
         # define d_mu for the critic loss
-        self.e_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self._scope)
-        self.policy_grads = tf.gradients(ys=self.output, xs=self.e_params, grad_ys=a_grads)
+        self.policy_grads = tf.gradients(ys=self.output, xs=e_params, grad_ys=a_grads)
         
     def As(self, state):  # only for actors
         _state = np.asarray(state).reshape(-1, self._o_space.shape[0])
@@ -106,14 +104,12 @@ class DDPGFunction:
         inp = {self.state: _state, self.action: _action}
         return self._sess.run(self.output, feed_dict=inp).reshape(-1, 1)
         
-    def save(self, path='./DQN_model.ckpt'):
+    def save(self, path='./DDPG_model.ckpt'):
         saver = tf.train.Saver()
         saver.save(self._sess, path)
         print ('model saved under the path: ', path)
             
             
-# In[2]: define Agents 
-
 
 
 # In[3] DDPG-Agent
@@ -127,15 +123,15 @@ class DDPGAgent(object):
         self._a_space = a_space
         self._action_n = 3 #a_space.n
         self._config = {
-            "eps_begin": 0.3,            # Epsilon in epsilon greedy policies
-            "eps_end": 0.05,
-            "eps_decay": 0.99,
+            #"eps_begin": 0.3,            # Epsilon in epsilon greedy policies
+            #"eps_end": 0.05,
+            #"eps_decay": 0.99,
             "discount": 0.95,
             "buffer_size": int(5e5),
             "batch_size": 32,
             "learning_rate_a": 1e-5,
-            "learning_rate_c": 2e-5,
-            "theta": 0.05,
+            "learning_rate_c": 1e-6,
+            "theta": 0.05, #soft update rate
             "use_target_net": True,}
         self._config.update(userconfig)
         self._scope = scope
@@ -181,15 +177,21 @@ class DDPGAgent(object):
         self._Qval = self._Q.output #nx1
         # critic
         self._target = tf.placeholder(dtype=tf.float32, shape=(None, 1), name="target")
-        self._c_loss = tf.reduce_mean(tf.squared_difference(self._Qval, self._target))
+        self._c_loss = tf.reduce_mean(tf.squared_difference(self._Qval, self._target))  # dimension correct?
         self._c_optim = tf.train.AdamOptimizer(learning_rate=self._config['learning_rate_c'])
         self._c_train_op = self._c_optim.minimize(self._c_loss)
         
-        # actor
-        self._a_loss = - tf.reduce_mean(self._Q.output)
-        self._a_optim = tf.train.AdamOptimizer(learning_rate=self._config['learning_rate_a'])
-        self._a_train_op = self._a_optim.minimize(self._a_loss)
+        # policy gradient for actor Mu
+        a_grads = tf.gradients(self._Q.output, self._Q.action)[0]
+        self._Mu.add_grads(self._vars('Mu'), a_grads)
         
+        # actor policy gradient
+        
+#        self._a_loss = - tf.reduce_mean(self._Q.output)        
+        self._a_optim = tf.train.AdamOptimizer(learning_rate=-self._config['learning_rate_a']) 
+        self._a_train_op = self._a_optim.apply_gradients(zip(self._Mu.policy_grads, self._vars('Mu')))
+        
+        # update operations
         self._q_update_target_op = [tf.assign(
                 target_var, 
                 (1-self._config['theta'])*target_var + self._config['theta']*eval_var) 
@@ -199,7 +201,7 @@ class DDPGAgent(object):
                 (1-self._config['theta'])*target_var + self._config['theta']*eval_var) 
                                      for target_var, eval_var in zip(self._vars('Mu_target'), self._vars('Mu'))]
             
-    def train(self, iter_fit=4, writer=None, ep=0):
+    def train(self, iter_fit=2, writer=None, ep=0):
         losses = []
         for i in range(iter_fit):
 
@@ -221,10 +223,11 @@ class DDPGAgent(object):
             inp = {self._Q.state: s, self._Q.action: a, self._target: y_i}
             c_loss = self._sess.run([self._c_train_op, self._c_loss], feed_dict=inp)[1]
             # actor
-            a_loss = self._sess.run([self._a_train_op, self._a_loss], feed_dict=inp)[1]
-            losses.extend([c_loss, a_loss])
+            inp = {self._Q.state: s, self._Q.action: a, self._Mu.state: s}
+            self._sess.run(self._a_train_op, feed_dict=inp)
+            losses.append(c_loss)
             
-        # update target nets
+            # update target nets
         if self._config['use_target_net']:
             self._sess.run(self._q_update_target_op)
             self._sess.run(self._mu_update_target_op)
@@ -249,71 +252,56 @@ class DDPGAgent(object):
 
 fps = 100 # env.metadata.get('video.frames_per_second')
 max_steps = 80 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
-#max_steps
-
+n=10 #training frequency
+max_episodes=10000
 
 # In[4]: Start training
+ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.95, eps_begin=0.3)
 
-
-ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.99, eps_begin=0.3)
-
-# test the outputs
-ob = env.reset()
-ac_output = ddpg_agent._Mu.As(ob)
-q_output = ddpg_agent._Q.Qs(ob, ac_output)
+## test the outputs
+#ob = env.reset()
+#ac_output = ddpg_agent._Mu.As(ob)
+#q_output = ddpg_agent._Q.Qs(ob, ac_output)
 
 # start training
 stats = []
 losses = []
 
-
 writer=None
 
-max_episodes=1000
-#mode="random"
 show=False
 mode="DDPG"
+
 for i in range(max_episodes):
     # print("Starting a new episode")    
     total_reward = 0
     ob = env.reset()
     for t in range(max_steps):
         done = False
-        if mode == "random":
-            action = np.random.randint(0, 6)
-            a = env.discrete_to_continous_action(action)
-            a = np.hstack([a, [0,0.,0]])
-            #print ('action vector(random): ', a)
-            #a = ac_space.sample()              
-            
-        elif mode == "DDPG":
-            action = ddpg_agent.act(ob)
-            # adding noise to action
-            a_t = np.clip(np.random.normal(action, 0.1), -1, 1)
-            # opponent does random actions
-            a_opp = np.clip(np.random.normal([0, 0, 0], 0.5), -1, 1)
-            a = np.hstack([a_t, a_opp])
-            #print ('action vector(Q): ', a)
-        else:
-            raise ValueError("Game Mode Not Implemented")
-            
+        action = ddpg_agent.act(ob)
+        # adding noise to action
+        a_t = np.clip(np.random.normal(action, 0.05), -1, 1)
+        # opponent does random actions
+        a_opp = np.clip(np.random.normal([0, 0, 0], 0.5), -1, 1)
+        a = np.hstack([a_t, a_opp])
+        
         (ob_new, reward, done, _info) = env.step(a)
         total_reward+= reward
-        
-        if mode == "DDPG":
-            #print ({'s': ob, 'a': a, 'r': reward, 's_prime': ob_new, 'd': done})
-            ddpg_agent.store_transition({'s': ob, 'a': action, 'r': reward, 's_prime': ob_new, 'd': done})            
+
+        ddpg_agent.store_transition({'s': ob, 'a': action, 'r': reward, 's_prime': ob_new, 'd': done})            
         ob=ob_new        
         if show:
             time.sleep(1.0/fps)
             env.render(mode='human')
-        loss = ddpg_agent.train(1, writer=writer, ep=i)
+        # train in each n episodes:
+        if i%n==0:
+            loss = ddpg_agent.train(1, writer=writer, ep=i)
         losses.extend(loss)
         if done: break    
     stats.append([i,total_reward,t+1])
     #q_agent._eps_scheduler(writer=writer, ep=i)
-
-    print ('episode ', i, 'reward: ', total_reward, 'critic & actor loss: ', loss)
+    if i%n==0:
+        print ('episode ', i, 'reward: ', total_reward, 'critic & actor loss: ', loss)
     #if ((i-1)%50==0):
     #    print("Done after {} episodes. Reward: {}".format(i, total_reward))
 
@@ -321,7 +309,7 @@ for i in range(max_episodes):
 ddpg_agent._Mu_target.save()
 # save plot
 plt.plot(np.asarray(stats)[:,0], np.asarray(stats)[:,1])
-plt.savefig("DQN_loss.png")
+plt.savefig("DDPG_loss.png")
 plt.close()
 env.close()
 

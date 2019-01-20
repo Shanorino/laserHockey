@@ -5,8 +5,9 @@ import laser_hockey_env as lh
 from importlib import reload
 import time
 
-
 import matplotlib.pyplot as plt
+import tensorflow as tf
+
 
 reload(lh)
 env = lh.LaserHockeyEnv(mode=1)
@@ -16,7 +17,6 @@ o_space = env.observation_space
 print(ac_space)
 print(o_space)
 print(zip(env.observation_space.low, env.observation_space.high))
-
 
 
 import numpy as np
@@ -46,7 +46,7 @@ class Memory():
 
 
 
-import tensorflow as tf
+
 # Q network (also the critic network in DDPG)
 class QFunction:
     def __init__(self, o_space, a_space, gamma=0.99, scope='Q'):
@@ -68,8 +68,8 @@ class QFunction:
         self.h = tf.layers.dense(inputs=dense2, units=7, activation=None, name='h') #nx7
         self.output = tf.squeeze(self.h, name='pred')
         
-        tf.add_to_collection('pred_Qs', self.output)
-        #tf.add_to_collection('state', self.state) #however not used in the documents' examples
+        #tf.add_to_collection('pred_Qs', self.output, scope=self._scope)
+        #tf.add_to_collection('state', self.state, scope=scope) #however not used in the documents' examples
         
     
     def Qs(self, state):
@@ -91,7 +91,6 @@ class QFunction:
         saver.save(self._sess, path)
         print ('model saved under the path: ', path)
 
-
 # In[2]: define Agents 
 
 
@@ -100,11 +99,6 @@ class DQNAgent(object):
     Agent implementing Q-learning with NN function approximation.
     """
     def __init__(self, o_space, a_space, scope='DQNAgent', **userconfig):
-        
-#         if not isinstance(o_space, spaces.box.Box):
-#             raise UnsupportedSpace('Observation space {} incompatible with {}. (Require: Box)'.format(observation_space, self))
-#         if not isinstance(a_space, spaces.discrete.Discrete):
-#             raise UnsupportedSpace('Action space {} incompatible with {}. (Reqire Discrete.)'.format(action_space, self))
         
         self._o_space = o_space
         self._a_space = a_space
@@ -116,7 +110,7 @@ class DQNAgent(object):
             "discount": 0.95,
             "buffer_size": int(5e5),
             "batch_size": 32,
-            "learning_rate": 1e-5,
+            "learning_rate": 1e-4,
             "theta": 0.05,
             "use_target_net": True,}
         self._config.update(userconfig)
@@ -152,7 +146,7 @@ class DQNAgent(object):
         return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self._scope + '/' + scope)
             
     def _prep_train(self):
-        self._action = tf.placeholder(dtype=tf.int32, shape=(None,), name="target")
+        self._action = tf.placeholder(dtype=tf.int32, shape=(None,), name="action") #??
         self._action_onehot = tf.one_hot(self._action, self._action_n, dtype=tf.float32)
         self._Qval = tf.reduce_sum(tf.multiply(self._Q.output, self._action_onehot), axis=1)
         self._target = tf.placeholder(dtype=tf.float32, shape=(None,), name="target")
@@ -189,7 +183,7 @@ class DQNAgent(object):
         self._eps = max(self._config['eps_end'], self._eps*self._config['eps_decay'])
         if writer: writer.add_scalar('policy/eps', self._eps, ep)
     
-    def train(self, iter_fit=10, writer=None, ep=0):
+    def train(self, iter_fit=4, writer=None, ep=0):
         losses = []
         for i in range(iter_fit):
 
@@ -214,23 +208,23 @@ class DQNAgent(object):
             fit_loss = self._sess.run([self._train_op, self._loss], feed_dict=inp)[1]
             losses.append(fit_loss)
             
-            if self._config['use_target_net']:
-                self._update_target_net()
+        if self._config['use_target_net']:
+            self._update_target_net()
             
         return losses
     
     
 
 
-# In[117]:
+# In[4]: Initializing training parameters
 
 
 fps = 100 # env.metadata.get('video.frames_per_second')
-max_steps = 250 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
+max_steps = 80 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
 #max_steps
 
 
-# In[118]:
+# In[4]: Start training
 
 
 q_agent = DQNAgent(o_space, ac_space, discount=0.99, eps_begin=0.3)
@@ -244,7 +238,7 @@ losses = []
 
 writer=None
 
-max_episodes=100
+max_episodes=2000
 #mode="random"
 show=False
 mode="Q"
