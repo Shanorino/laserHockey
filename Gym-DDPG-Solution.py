@@ -8,7 +8,7 @@ import time
 import matplotlib.pyplot as plt
 import tensorflow as tf
 
-
+#tf.reset_default_graph()
 reload(lh)
 env = lh.LaserHockeyEnv(mode=1)
 ac_space = env.action_space
@@ -76,8 +76,8 @@ class DDPGFunction:
         w1_a = tf.get_variable('w1_a', [self._action_n, 100], trainable=1)
         b1 = tf.get_variable('b1', [1, 100], trainable=1)
         net = tf.nn.leaky_relu(tf.matmul(self.state, w1_s) + tf.matmul(self.action, w1_a) + b1)
-        self.h = tf.layers.dense(net, 1, activation=None, trainable=1)
-        self.output = tf.squeeze(self.h, name='predQ')
+        self.output = tf.layers.dense(net, 1, activation=None, trainable=1, name='predQ')
+        #self.output = tf.squeeze(self.output, name='predQ')
         
         
         
@@ -85,13 +85,13 @@ class DDPGFunction:
         self.state = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="state")
         dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.leaky_relu, name='l1') #nx100
         #dense2 = tf.layers.dense(inputs=dense1, units=100, activation=tf.nn.leaky_relu, name='l2')  #nx100
-        self.h = tf.layers.dense(inputs=dense1, units=self._action_n, activation=tf.nn.tanh, name='h') #nx3
-        self.output = tf.squeeze(self.h, name='predMu') # nx3
+        self.output = tf.layers.dense(inputs=dense1, units=self._action_n, activation=tf.nn.tanh, name='predMu') #nx3
+        #self.output = tf.squeeze(self.output, name='predMu') # nx3
         
     # for actor's policy gradient
     def add_grads(self, e_params, a_grads): 
         # define d_mu for the critic loss
-        self.policy_grads = tf.gradients(ys=self.output, xs=e_params, grad_ys=a_grads)
+        self.policy_grads = tf.gradients(ys=self.output, xs=e_params, grad_ys=a_grads)  #ys=mu, xs=theta_mu, grad_ys=dQ/da
         
     def As(self, state):  # only for actors
         _state = np.asarray(state).reshape(-1, self._o_space.shape[0])
@@ -129,7 +129,7 @@ class DDPGAgent(object):
             "discount": 0.95,
             "buffer_size": int(5e5),
             "batch_size": 32,
-            "learning_rate_a": 1e-3,
+            "learning_rate_a": 1e-4,
             "learning_rate_c": 1e-4,
             "theta": 0.05, #soft update rate
             "use_target_net": True,}
@@ -147,18 +147,20 @@ class DDPGAgent(object):
         
         # Create Q Networks and Mu Networks
         with tf.variable_scope(self._scope, reuse=tf.AUTO_REUSE):
-            self._Q = DDPGFunction(scope='Q', o_space=self._o_space, a_space=self._a_space, 
+            self._Q = DDPGFunction(scope='Q_eval', o_space=self._o_space, a_space=self._a_space, 
                                          gamma=self._config['discount'], mode='Q')
             self._Q_target = DDPGFunction(scope='Q_target', o_space=self._o_space, a_space=self._a_space, 
                                              gamma=self._config['discount'], mode='Q')
-            self._Mu = DDPGFunction(scope='Mu', o_space=self._o_space, a_space=self._a_space, 
+            self._Mu = DDPGFunction(scope='Mu_eval', o_space=self._o_space, a_space=self._a_space, 
                                          gamma=self._config['discount'], mode='Mu')
             self._Mu_target = DDPGFunction(scope='Mu_target', o_space=self._o_space, a_space=self._a_space, 
                                          gamma=self._config['discount'], mode='Mu')
             
             self._prep_train()
-            
+        
         self._sess.run(tf.global_variables_initializer())
+        
+        self.summary_writer = tf.summary.FileWriter("log", self._sess.graph)
         
     def _vars(self, scope=''):
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=self._scope + '/' + scope)
@@ -173,31 +175,27 @@ class DDPGAgent(object):
     def _prep_train(self):
         #self._Qval = self._Q.output #nx1
         
-        # critic optimizer
+        # CRITIC optimizer
         self._target = tf.placeholder(dtype=tf.float32, shape=(None, 1), name="target") #td target
         self._c_loss = tf.reduce_mean(tf.squared_difference(self._target, self._Q.output))  # dimension correct?
         self._c_optim = tf.train.AdamOptimizer(learning_rate=self._config['learning_rate_c'])
         self._c_train_op = self._c_optim.minimize(self._c_loss)
         
-        # policy gradient for actor Mu
-        a_grads = tf.gradients(self._Q.output, self._Q.action)[0]
-        self._Mu.add_grads(self._vars('Mu'), a_grads)
-        
-#        self._a_loss = - tf.reduce_mean(self._Mu.output)
-#        self._a_optim = tf.train.AdamOptimizer(learning_rate=self._config['learning_rate_a'])
-#        self._a_train_op = self._a_optim.minimize(self._a_loss)
-        self._a_optim = tf.train.AdamOptimizer(learning_rate=self._config['learning_rate_a']) 
-        self._a_train_op = self._a_optim.apply_gradients(zip(self._Mu.policy_grads, self._vars('Mu')))
+        # ACTOR policy gradient for actor Mu
+        a_grads = tf.gradients(self._Q.output, self._Q.action)[0]  #dQ/da; nx3
+        self._Mu.add_grads(self._vars('Mu_eval'), a_grads)
+        self._a_optim = tf.train.AdamOptimizer(learning_rate=-self._config['learning_rate_a']) 
+        self._a_train_op = self._a_optim.apply_gradients(zip(self._Mu.policy_grads, self._vars('Mu_eval')))
         
         # update operations
         self._q_update_target_op = [tf.assign(
                 target_var, 
                 (1-self._config['theta'])*target_var + self._config['theta']*eval_var) 
-                                     for target_var, eval_var in zip(self._vars('Q_target'), self._vars('Q'))]
+                                     for target_var, eval_var in zip(self._vars('Q_target'), self._vars('Q_eval'))]
         self._mu_update_target_op = [tf.assign(
                 target_var, 
                 (1-self._config['theta'])*target_var + self._config['theta']*eval_var) 
-                                     for target_var, eval_var in zip(self._vars('Mu_target'), self._vars('Mu'))]
+                                     for target_var, eval_var in zip(self._vars('Mu_target'), self._vars('Mu_eval'))]
             
     def train(self, iter_fit=2, writer=None, ep=0):
         losses = []
@@ -253,9 +251,9 @@ class DDPGAgent(object):
 
 fps = 100 # env.metadata.get('video.frames_per_second')
 max_steps = 80 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
-n=1 #training frequency (train once in n episodes)
+n=10 #training frequency (train once in n episodes)
 update_f=1 #update frequency (update once in f trainings)
-max_episodes=10000
+max_episodes=5000
 
 # In[4]: Start training
 ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.99)
@@ -297,13 +295,13 @@ for i in range(max_episodes):
             time.sleep(1.0/fps)
             env.render(mode='human')
         # training frequency n; update frequency update_f;
-        if i%n==0:
+        if t%n==0:
             loss = ddpg_agent.train(update_f, writer=writer, ep=i)
         losses.extend(loss)
         if done: break    
     stats.append([i,total_reward,t+1])
     #q_agent._eps_scheduler(writer=writer, ep=i)
-    if i%n==0:
+    if i%1==0: #print frequency
         print ('episode ', i, 'reward: ', total_reward, 'critic loss: ', loss)
 
 # save the model
