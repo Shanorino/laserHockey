@@ -250,7 +250,7 @@ class DDPGAgent(object):
 
 
 fps = 100 # env.metadata.get('video.frames_per_second')
-max_steps = 80 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
+max_steps = 200 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
 n=10 #training frequency (train once in n episodes)
 update_f=1 #update frequency (update once in f trainings)
 max_episodes=5000

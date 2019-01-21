@@ -115,6 +115,9 @@ class LaserHockeyEnv(gym.Env, EzPickle):
         # linear force in (x,y)-direction and torque
         self.action_space = spaces.Box(-1, +1, (3*2,), dtype=np.float32)
 
+        # see discrete_to_continous_action()
+        self.discrete_action_space = spaces.Discrete(7)
+
         self.reset(self.one_starts)
 
     def seed(self, seed=None):
@@ -454,16 +457,14 @@ class LaserHockeyEnv(gym.Env, EzPickle):
     def _compute_reward(self):
         r = 0
         info = self._get_info()
-        if info['reward_touch_puck'] > 0:
-            r += 10
-        r += info['reward_closeness_to_puck']*5 + info['reward_puck_direction']*100
+        r += info['reward_closeness_to_puck'] + info['reward_touch_puck']*2 + info['reward_puck_direction']*2
         if self.done:
             if self.winner == 0: # tie
                 r += 0
             elif self.winner == 1: # you won
-                r += 50
+                r += 10
             else: # opponent won
-                r -= 50
+                r -= 10
 
         return r
 
