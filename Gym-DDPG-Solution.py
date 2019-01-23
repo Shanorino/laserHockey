@@ -63,8 +63,8 @@ class DDPGFunction:
     def _build_graph_q(self):  
         self.state = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="state") #nx16
         self.action = tf.placeholder(dtype=tf.float32, shape=(None, self._action_n), name="action") #nx3
-#        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.relu, name='l_state')  #nx100
-#        dense2 = tf.layers.dense(inputs=self.action, units=100, activation=tf.nn.relu, name='l_action') #nx100
+#        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.relu, name='l1_q')  #nx100
+#        dense2 = tf.layers.dense(inputs=self.action, units=100, activation=tf.nn.relu, name='l1_action') #nx100
 #        
 #        sa = tf.add(dense1,dense2) #nx100
 #        self.h = tf.layers.dense(inputs=sa, units=1, activation=None, name='h') #nx1
@@ -72,20 +72,22 @@ class DDPGFunction:
         
         init_w = tf.random_normal_initializer(0., 0.1)
         init_b = tf.constant_initializer(0.1)
-        w1_s = tf.get_variable('w1_s', [self._o_space.shape[0], 100], trainable=1)
-        w1_a = tf.get_variable('w1_a', [self._action_n, 100], trainable=1)
+        w1_s = tf.get_variable('w1_s', [self._o_space.shape[0], 100], trainable=1) #16x100
+        w1_a = tf.get_variable('w1_a', [self._action_n, 100], trainable=1)  #3x100
         b1 = tf.get_variable('b1', [1, 100], trainable=1)
         net = tf.nn.leaky_relu(tf.matmul(self.state, w1_s) + tf.matmul(self.action, w1_a) + b1)
-        self.output = tf.layers.dense(net, 1, activation=None, trainable=1, name='predQ')
+        self.output = tf.layers.dense(net, 1, activation=None, 
+                                      trainable=1, kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001), name='predQ') #kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001),
         #self.output = tf.squeeze(self.output, name='predQ')
         
         
         
     def _build_graph_mu(self):
         self.state = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="state")
-        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.leaky_relu, name='l1') #nx100
-        #dense2 = tf.layers.dense(inputs=dense1, units=100, activation=tf.nn.leaky_relu, name='l2')  #nx100
-        self.output = tf.layers.dense(inputs=dense1, units=self._action_n, activation=tf.nn.tanh, name='predMu') #nx3
+        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.leaky_relu, name='l1_mu') #nx100
+        dense2 = tf.layers.dense(inputs=dense1, units=100, activation=tf.nn.leaky_relu, 
+                                 kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001), name='l2_mu')  #nx100
+        self.output = tf.layers.dense(inputs=dense2, units=self._action_n, activation=tf.nn.tanh, name='predMu') #nx3
         #self.output = tf.squeeze(self.output, name='predMu') # nx3
         
     # for actor's policy gradient
@@ -127,11 +129,11 @@ class DDPGAgent(object):
             #"eps_end": 0.05,
             #"eps_decay": 0.99,
             "discount": 0.95,
-            "buffer_size": int(5e5),
-            "batch_size": 32,
+            "buffer_size": int(5e4),
+            "batch_size": 64,
             "learning_rate_a": 1e-4,
             "learning_rate_c": 1e-4,
-            "theta": 0.05, #soft update rate
+            "theta": 0.01, #soft update rate
             "use_target_net": True,}
         self._config.update(userconfig)
         self._scope = scope
@@ -246,12 +248,23 @@ class DDPGAgent(object):
 #            #action = self._a_space.sample()        
         return np.squeeze(self._Mu.As(observation))
     
+    
+# In[4] plot the reward once in a while for the reward engineering
+# input rewards nx2
+def plot_reward(reward_stat, start_idx, end_idx):
+    plt.plot(np.asarray(reward_stat)[start_idx:end_idx,0], np.asarray(reward_stat)[start_idx:end_idx,1])
+    plt.title('DDPG Rewards')
+    plt.xlabel('episode')
+    plt.ylabel('score')
+    plt.savefig("DDPG_reward.png")
+    plt.close()
+
 # In[4]: Initializing training parameters
 
 
 fps = 100 # env.metadata.get('video.frames_per_second')
-max_steps = 200 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
-n=10 #training frequency (train once in n episodes)
+max_steps = 100 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
+n=4 #training frequency (train once in n steps)
 update_f=1 #update frequency (update once in f trainings)
 max_episodes=5000
 
@@ -303,12 +316,14 @@ for i in range(max_episodes):
     #q_agent._eps_scheduler(writer=writer, ep=i)
     if i%1==0: #print frequency
         print ('episode ', i, 'reward: ', total_reward, 'critic loss: ', loss)
+    if i%100==0: # plot each interval of 100
+        plot_reward(stats, i-100, i)
 
 # save the model
-ddpg_agent._Mu_target.save()
+#ddpg_agent._Mu_target.save()
 # save plot
 plt.plot(np.asarray(stats)[:,0], np.asarray(stats)[:,1])
-plt.savefig("DDPG_loss.png")
+plt.savefig("DDPG_reward.png")
 plt.close()
 env.close()
 

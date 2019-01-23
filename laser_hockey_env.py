@@ -457,14 +457,20 @@ class LaserHockeyEnv(gym.Env, EzPickle):
     def _compute_reward(self):
         r = 0
         info = self._get_info()
-        r += info['reward_closeness_to_puck'] + info['reward_touch_puck']*2 + info['reward_puck_direction']*2
+        hit = 0
+        if info['reward_touch_puck'] > 0:
+            if self.player1.position[0] < self.puck.position[0]:
+                hit = 16 # hitting from the left side
+            else:
+                hit = 8 # hitting from the right side (probable own goal)
+        r += info['reward_closeness_to_puck']*4 + hit + info['reward_puck_direction']*4
         if self.done:
             if self.winner == 0: # tie
                 r += 0
             elif self.winner == 1: # you won
-                r += 10
+                r += 32
             else: # opponent won
-                r -= 10
+                r -= 32
 
         return r
 
@@ -478,6 +484,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
             max_reward = -5. # max (negative) reward through this proxy
             factor = max_reward / (max_dist*self.max_timesteps/2)
             reward_closeness_to_puck += dist_to_puck*factor # Proxy reward for being close to puck in the own half
+            
         # Proxy reward: touch puck
         reward_touch_puck = 0.
         if self.player1_contact_puck:
