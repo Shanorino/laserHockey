@@ -10,7 +10,7 @@ import tensorflow as tf
 
 #tf.reset_default_graph()
 reload(lh)
-env = lh.LaserHockeyEnv(mode=1)
+env = lh.LaserHockeyEnv(mode=0)
 ac_space = env.action_space
 o_space = env.observation_space
 #print(ac_space)
@@ -129,7 +129,7 @@ class DDPGAgent(object):
             #"eps_end": 0.05,
             #"eps_decay": 0.99,
             "discount": 0.95,
-            "buffer_size": int(5e4),
+            "buffer_size": int(3e4),
             "batch_size": 64,
             "learning_rate_a": 1e-4,
             "learning_rate_c": 1e-4,
@@ -286,7 +286,7 @@ writer=None
 
 show=False
 mode="DDPG"
-
+playerComputer = lh.BasicOpponent()
 for i in range(max_episodes):
     start_noise -= noise_step
     total_reward = 0
@@ -297,7 +297,7 @@ for i in range(max_episodes):
         # adding noise to action
         a_t = np.clip(np.random.normal(action, start_noise), -1, 1)
         # opponent does total random actions
-        a_opp = np.clip(np.random.normal([0, 0, 0], 0.5), -1, 1)
+        a_opp = playerComputer.act(env.obs_agent_two())
         
         a = np.hstack([a_t, a_opp])
         (ob_new, reward, done, _info) = env.step(a)
