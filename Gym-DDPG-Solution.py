@@ -267,7 +267,8 @@ max_steps = 100 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
 n=4 #training frequency (train once in n steps)
 update_f=1 #update frequency (update once in f trainings)
 max_episodes=5000
-
+start_noise=0.3
+noise_step=start_noise/max_episodes
 # In[4]: Start training
 ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.99)
 
@@ -287,14 +288,14 @@ show=False
 mode="DDPG"
 
 for i in range(max_episodes):
-    # print("Starting a new episode")    
+    start_noise -= noise_step
     total_reward = 0
     ob = env.reset()
     for t in range(max_steps):
         done = False
         action = ddpg_agent.act(ob)
         # adding noise to action
-        a_t = np.clip(np.random.normal(action, 0.2), -1, 1)
+        a_t = np.clip(np.random.normal(action, start_noise), -1, 1)
         # opponent does total random actions
         a_opp = np.clip(np.random.normal([0, 0, 0], 0.5), -1, 1)
         
@@ -320,7 +321,7 @@ for i in range(max_episodes):
         plot_reward(stats, i-100, i)
 
 # save the model
-#ddpg_agent._Mu_target.save()
+ddpg_agent._Mu_target.save()
 # save plot
 plt.plot(np.asarray(stats)[:,0], np.asarray(stats)[:,1])
 plt.savefig("DDPG_reward.png")
