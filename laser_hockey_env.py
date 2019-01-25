@@ -85,6 +85,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
         self.done = False
         self.winner = 0
         self.one_starts = True # player one starts the game (alternating)
+        self.combo = 0
 
         self.max_puck_speed = 20
 
@@ -318,6 +319,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
 
 
     def reset(self, one_starting = None, mode = None):
+        self.combo = 0 
         self._destroy()
         self.world.contactListener_keepref = ContactDetector(self)
         self.world.contactListener = self.world.contactListener_keepref
@@ -366,14 +368,14 @@ class LaserHockeyEnv(gym.Env, EzPickle):
             )
         if self.mode == self.NORMAL or self.mode == self.TRAIN_SHOOTING:
             if self.one_starts or self.mode == self.TRAIN_SHOOTING:
-                self.puck = self._create_puck( (W / 2 - self.r_uniform(H/8, H/4),
+                self.puck = self._create_puck( (W / 2 - self.r_uniform(W/8, W/4),
                                                H / 2 + self.r_uniform(-H/8, H/8)), (0,0,0) )
             else:
-                self.puck = self._create_puck( (W / 2 + self.r_uniform(H/8, H/4),
+                self.puck = self._create_puck( (W / 2 + self.r_uniform(W/8, W/4),
                                                H / 2 + self.r_uniform(-H/8, H/8)), (0,0,0) )
         elif self.mode == self.TRAIN_DEFENSE:
             self.puck = self._create_puck((W / 2 + self.r_uniform(0, W/3),
-                                           H / 2 + 0.9*self.r_uniform(-H/2, H/2)),  (0,0,0) )
+                                           H / 2 + 0.9*self.r_uniform(-H/3, H/3)),  (0,0,0) )
             force = -(self.puck.position - (0, H/2 + self.r_uniform(-66/SCALE, 66/SCALE)))*self.puck.mass/self.timeStep
             self.puck.ApplyForceToCenter(force, True)
 
@@ -463,14 +465,16 @@ class LaserHockeyEnv(gym.Env, EzPickle):
                 hit = 16 # hitting from the left side
             else:
                 hit = 8 # hitting from the right side (probable own goal)
-        r += info['reward_closeness_to_puck']*4 + hit + info['reward_puck_direction']*4
+        r += info['reward_closeness_to_puck']*10 + hit + info['reward_puck_direction']*10
         if self.done:
             if self.winner == 0: # tie
                 r += 0
             elif self.winner == 1: # you won
-                r += 32
+                r += (self.combo+1) * 16
+                #self.combo = 0 now doing in reset()
             else: # opponent won
                 r -= 32
+                #self.combo = 0
 
         return r
 
@@ -489,6 +493,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
         reward_touch_puck = 0.
         if self.player1_contact_puck:
             reward_touch_puck = 1.
+            self.combo += 1
 
         # puck is flying in the right direction
         reward_puck_direction = 0
@@ -523,9 +528,9 @@ class LaserHockeyEnv(gym.Env, EzPickle):
         Action 5: -1 in angle
         Action 6: 1 in angle
         '''
-        action_cont = [(discrete_action==1) * -1 + (discrete_action==2) * 1, # player x
-                       (discrete_action==3) * -1 + (discrete_action==4) * 1, # player y
-                       (discrete_action==5) * -1 + (discrete_action==6) * 1] # player angle
+        action_cont = [(discrete_action==1) * -0.6 + (discrete_action==2) * 0.6, # player x
+                       (discrete_action==3) * -0.6 + (discrete_action==4) * 0.6, # player y
+                       (discrete_action==5) * -0.6 + (discrete_action==6) * 0.6] # player angle
 
         return action_cont
 
