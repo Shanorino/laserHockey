@@ -10,7 +10,7 @@ import tensorflow as tf
 
 #tf.reset_default_graph()
 reload(lh)
-env = lh.LaserHockeyEnv(mode=0)
+env = lh.LaserHockeyEnv(mode=1)
 ac_space = env.action_space
 o_space = env.observation_space
 #print(ac_space)
@@ -129,7 +129,7 @@ class DDPGAgent(object):
             #"eps_end": 0.05,
             #"eps_decay": 0.99,
             "discount": 0.95,
-            "buffer_size": int(3e4),
+            "buffer_size": int(5e4),
             "batch_size": 64,
             "learning_rate_a": 1e-4,
             "learning_rate_c": 1e-4,
@@ -253,8 +253,10 @@ class DDPGAgent(object):
 # input rewards nx2
 def plot_reward(reward_stat, start_idx, end_idx):
     plt.plot(np.asarray(reward_stat)[start_idx:end_idx,0], np.asarray(reward_stat)[start_idx:end_idx,1])
-    plt.title('DDPG Rewards')
-    plt.xlabel('episode')
+    winning_rate = np.sum(np.asarray(reward_stat)[start_idx:end_idx,1] > 32)
+    fail_rate = np.sum(np.asarray(reward_stat)[start_idx:end_idx,1] < -32)
+    plt.title('DDPG Rewards & winning rate: ' + str(winning_rate) + ' fail rate:' + str(fail_rate))
+    plt.xlabel('episode') 
     plt.ylabel('score')
     plt.savefig("DDPG_reward.png")
     plt.close()
@@ -266,8 +268,9 @@ fps = 100 # env.metadata.get('video.frames_per_second')
 max_steps = 100 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
 n=4 #training frequency (train once in n steps)
 update_f=1 #update frequency (update once in f trainings)
-max_episodes=5000
+max_episodes=10000
 start_noise=0.3
+#step=0.00001
 noise_step=start_noise/max_episodes
 # In[4]: Start training
 ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.99)
@@ -289,6 +292,7 @@ mode="DDPG"
 playerComputer = lh.BasicOpponent()
 for i in range(max_episodes):
     start_noise -= noise_step
+    start_noise = np.max([start_noise, 0.01])
     total_reward = 0
     ob = env.reset()
     for t in range(max_steps):
@@ -296,8 +300,12 @@ for i in range(max_episodes):
         action = ddpg_agent.act(ob)
         # adding noise to action
         a_t = np.clip(np.random.normal(action, start_noise), -1, 1)
-        # opponent does total random actions
-        a_opp = playerComputer.act(env.obs_agent_two())
+        # first 3000 episodes, opponent does total random actions
+        if i < 1000:
+            a_opp = np.clip(np.random.normal([0, 0, 0], 0.5), -1, 1)
+        # after 3000 episodes it plays against a basic opponent
+        else:
+            a_opp = playerComputer.act(env.obs_agent_two())
         
         a = np.hstack([a_t, a_opp])
         (ob_new, reward, done, _info) = env.step(a)
