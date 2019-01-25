@@ -8,9 +8,9 @@ import time
 import matplotlib.pyplot as plt
 import tensorflow as tf
 
-
+#
 reload(lh)
-env = lh.LaserHockeyEnv(mode=1)
+env = lh.LaserHockeyEnv(mode=2)
 #env = gym.make(env_name)
 ac_space = env.action_space
 o_space = env.observation_space
@@ -108,7 +108,7 @@ class DQNAgent(object):
             "eps_end": 0.05,
             "eps_decay": 0.99,
             "discount": 0.95,
-            "buffer_size": int(5e5),
+            "buffer_size": int(5e4),
             "batch_size": 32,
             "learning_rate": 1e-4,
             "theta": 0.05,
@@ -135,7 +135,6 @@ class DQNAgent(object):
                                              gamma=self._config['discount'])
                 
             self._prep_train()
-            
         self._sess.run(tf.global_variables_initializer())
         
             
@@ -214,13 +213,19 @@ class DQNAgent(object):
         return losses
     
     
-
+def plot_reward(reward_stat, start_idx, end_idx):
+    plt.plot(np.asarray(reward_stat)[start_idx:end_idx,0], np.asarray(reward_stat)[start_idx:end_idx,1])
+    plt.title('DQN Rewards')
+    plt.xlabel('episode')
+    plt.ylabel('score')
+    plt.savefig("DQN_reward.png")
+    plt.close()
 
 # In[4]: Initializing training parameters
 
 
 fps = 100 # env.metadata.get('video.frames_per_second')
-max_steps = 80 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
+max_steps = 120 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
 #max_steps
 
 
@@ -238,7 +243,9 @@ losses = []
 
 writer=None
 
-max_episodes=2000
+max_episodes=5000
+playerComputer = lh.BasicOpponent()
+
 #mode="random"
 show=False
 mode="Q"
@@ -248,17 +255,12 @@ for i in range(max_episodes):
     ob = env.reset()
     max_height = -np.inf
     for t in range(max_steps):
-        done = False
-        if mode == "random":
-            action = np.random.randint(0, 6)
-            a = env.discrete_to_continous_action(action)
-            a = np.hstack([a, [0,0.,0]])
-            #print ('action vector(random): ', a)
-            #a = ac_space.sample()                        
-        elif mode == "Q":
+        done = False        
+        if mode == "Q":
             action = q_agent.act(ob)
             a = env.discrete_to_continous_action(action)
-            a = np.hstack([a, [0,0.,0]])
+            a_opp = playerComputer.act(env.obs_agent_two())
+            a = np.hstack([a, a_opp])
             #print ('action vector(Q): ', a)
         else:
             raise ValueError("no implemented")
@@ -277,8 +279,12 @@ for i in range(max_episodes):
         if done: break    
     stats.append([i,total_reward,t+1])
     q_agent._eps_scheduler(writer=writer, ep=i)
-
-    print ('episode ', i, 'reward: ', total_reward, 'loss: ', loss)
+    
+    if i%1==0: #print frequency
+        print ('episode ', i, 'reward: ', total_reward, 'loss: ', loss)
+    if i%100==0: # plot each interval of 100
+        plot_reward(stats, i-100, i)
+        
     #if ((i-1)%50==0):
     #    print("Done after {} episodes. Reward: {}".format(i, total_reward))
 
