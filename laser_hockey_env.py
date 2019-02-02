@@ -11,6 +11,8 @@ from gym.utils import seeding, EzPickle
 import pyglet
 from pyglet import gl
 
+
+
 FPS = 50
 SCALE = 30.0  # affects how fast-paced the game is, forces should be adjusted as well (Don't touch)
 
@@ -91,7 +93,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
 
         self.timeStep = 1.0 / FPS
         self.time = 0
-        self.max_timesteps = 500
+        self.max_timesteps = 5000
 
         self.closest_to_goal_dist = 1000
 
@@ -200,7 +202,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
             )
             wall.color1 = (0,0,0)
             wall.color2 = (0,0,0)
-
+            
             return wall
 
         def _create_decoration():
@@ -291,8 +293,8 @@ class LaserHockeyEnv(gym.Env, EzPickle):
         self.world_objects.append(_create_wall((W/2+245/SCALE,52.5/SCALE+1), poly))
 
         self.drawlist.extend(self.world_objects)
-
     def _create_goal(self, position, poly):
+        #print ('creating wall: ', [ (x/SCALE,y/SCALE) for x,y in poly ])
         goal = self.world.CreateStaticBody(
             position=position,
             angle=0.0,
@@ -356,7 +358,7 @@ class LaserHockeyEnv(gym.Env, EzPickle):
         )
         if self.mode != self.NORMAL:
             self.player2 = self._create_player(
-                (4* W / 5 + self.r_uniform(-W / 3, W/6), H/2 + self.r_uniform(-H/4, H/4)),
+                (4* W / 5 + self.r_uniform(-W / 3, W/10), H/2 + self.r_uniform(-H/4, H/4)),
                 (0,0,1),
                 True
             )
@@ -455,49 +457,104 @@ class LaserHockeyEnv(gym.Env, EzPickle):
 
         return obs
 
-
+    def _own_goal_direction(self):
+        k_puck = self.puck.linearVelocity[1] / (self.puck.linearVelocity[0] + 0.00001) 
+        puck = self.puck.position - [CENTER_X,CENTER_Y]
+        upper = [-10.17, 2.2]
+        lower = [-10.17, -2.2]
+        k_upper = (-puck[1] + upper[1]) / (-puck[0] + upper[0]) 
+        k_lower = (-puck[1] + lower[1]) / (-puck[0] + lower[0]) 
+        if k_upper < k_puck and k_puck < k_lower and self.puck.linearVelocity[0] < 0:
+            return True
+        else:
+            return False
+    
+    
     def _compute_reward(self):
         r = 0
         info = self._get_info()
+        
         hit = 0
         if info['reward_touch_puck'] > 0:
+            self.combo += 1
+            #print ('combo: ', self.combo)
             if self.player1.position[0] < self.puck.position[0]:
-                hit = 16 # hitting from the left side
+                hit = 1 # hitting from the left side
+            elif self._own_goal_direction():
+                hit = -1 # own goal
             else:
-                hit = 8 # hitting from the right side (probable own goal)
-        r += info['reward_closeness_to_puck']*10 + hit + info['reward_puck_direction']*10
+                hit = 0 # hitting from the right side (probable own goal)
+        r += info['reward_closeness_to_puck']*1 + info['reward_puck_direction']*1 + info['defence_line_distance']*0 + hit 
         if self.done:
+            if self.combo>0:
+                pass
+                #print ('done with ' + str(self.combo) + ' hits')
             if self.winner == 0: # tie
                 r += 0
             elif self.winner == 1: # you won
-                r += (self.combo+1) * 16
+                r += 0 #(self.combo+1) * 32
                 #self.combo = 0 now doing in reset()
             else: # opponent won
-                r -= 32
+                r -= 1 #(self.combo+1) * 32
                 #self.combo = 0
-
+    
         return r
 
     def _get_info(self):
         # different proxy rewards:
         # Proxy reward for being close to puck in the own half
         reward_closeness_to_puck = 0
+        ct_err = 0
+        defence_angle = 0
+        puck = self.puck.position - [CENTER_X,CENTER_Y]
+        p1 = self.player1.position-[CENTER_X,CENTER_Y]
+        # if the puck is on the own half: kick the puck
         if self.puck.position[0] < CENTER_X:
             dist_to_puck = dist_positions(self.player1.position, self.puck.position)
             max_dist = 10.
             max_reward = -5. # max (negative) reward through this proxy
             factor = max_reward / (max_dist*self.max_timesteps/2)
-            reward_closeness_to_puck += dist_to_puck*factor # Proxy reward for being close to puck in the own half
+            reward_closeness_to_puck += -np.min([np.exp(dist_to_puck), 200])*0.001 # Proxy reward for being close to puck in the own half
+#            reward_closeness_to_puck += np.sqrt(dist_to_puck) * factor
+        # if the puck is on the another half: go back to defence
+        else:
+            dist_to_puck = dist_positions(self.player1.position, [0.17, CENTER_Y])
+            max_dist = 10.
+            max_reward = -5. # max (negative) reward through this proxy
+            factor = max_reward / (max_dist*self.max_timesteps/2)
+            reward_closeness_to_puck += -np.min([np.exp(dist_to_puck), 200])*0.001
+#            reward_closeness_to_puck += np.sqrt(dist_to_puck) * factor
+        
+        
+        # Proxy reward for on the defence line (cross track error) when puck is on the opponent's half
+        if self.player1.position[0] < self.puck.position[0]:
+            k = self.puck.linearVelocity[1] / (self.puck.linearVelocity[0] + 0.00001)
+#            if k > 1 and self.puck.position[0] > CENTER_X :
+#                b = self.puck.position[1] - k * self.puck.position[0]
+#                factor = -5 / (10*self.max_timesteps/2) # like above
+#    #            ct_err = factor * abs(k * self.player1.position[0] - self.player1.position[1] + b)/(1 + k * k)**0.5 
+#                ct_err = factor * np.sqrt( abs(k * self.player1.position[0] - self.player1.position[1] + b)/(1 + k * k)**0.5 )
+#            else: 
+            b = puck[1] - k * puck[0]
+            factor = -5 / (10*self.max_timesteps/2) # like above
+    #            ct_err = factor * abs(k * self.player1.position[0] - self.player1.position[1] + b)/(1 + k * k)**0.5 
+            ct_err = factor * np.sqrt( abs(k * p1[0] - p1[1] + b)/(1 + k * k)**0.5 )
+        else:
+            factor = -5 / (10*self.max_timesteps/2) # like above
+            ct_err = factor * np.sqrt(abs(p1[0] - puck[0]))
             
+        if self.puck.linearVelocity[0] != 0 and self.puck.linearVelocity[1] != 0:
+            factor = -1 / (10*self.max_timesteps/2) # like above
+            defence_angle = np.min([abs(np.tan(abs(self.player1.angle)%(np.pi))),5]) * factor #+ np.arctan2(self.puck.linearVelocity[0], self.puck.linearVelocity[1]))
+        
         # Proxy reward: touch puck
         reward_touch_puck = 0.
         if self.player1_contact_puck:
             reward_touch_puck = 1.
-            self.combo += 1
-
+            
         # puck is flying in the right direction
         reward_puck_direction = 0
-        max_reward = 1.
+        max_reward = 2.
         factor = max_reward / (self.max_timesteps * self.max_puck_speed)
         reward_puck_direction = self.puck.linearVelocity[0]*factor # Puck flies right is good and left not
 
@@ -506,6 +563,8 @@ class LaserHockeyEnv(gym.Env, EzPickle):
                  "reward_closeness_to_puck" : reward_closeness_to_puck,
                  "reward_touch_puck" : reward_touch_puck,
                  "reward_puck_direction" : reward_puck_direction,
+                 "defence_line_distance": ct_err,
+                 "defence_angle": defence_angle,
                }
 
 
