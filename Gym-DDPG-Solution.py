@@ -7,10 +7,12 @@ import time
 
 import matplotlib.pyplot as plt
 import tensorflow as tf
+from tensorboardX import SummaryWriter
+from datetime import datetime
 
 #tf.reset_default_graph()
 reload(lh)
-env = lh.LaserHockeyEnv(mode=1)
+env = lh.LaserHockeyEnv(mode=0)
 ac_space = env.action_space
 o_space = env.observation_space
 #print(ac_space)
@@ -70,22 +72,24 @@ class DDPGFunction:
 #        self.h = tf.layers.dense(inputs=sa, units=1, activation=None, name='h') #nx1
 #        self.output = tf.squeeze(self.h, name='predQ')
         
-        init_w = tf.random_normal_initializer(0., 0.1)
-        init_b = tf.constant_initializer(0.1)
-        w1_s = tf.get_variable('w1_s', [self._o_space.shape[0], 100], trainable=1) #16x100
-        w1_a = tf.get_variable('w1_a', [self._action_n, 100], trainable=1)  #3x100
-        b1 = tf.get_variable('b1', [1, 100], trainable=1)
+        #init_w = tf.random_normal_initializer(0., 0.1)
+        #init_b = tf.constant_initializer(0.1)
+        w1_s = tf.get_variable('w1_s', [self._o_space.shape[0], 500], trainable=1) #16x100
+        w1_a = tf.get_variable('w1_a', [self._action_n, 500], trainable=1)  #3x100
+        b1 = tf.get_variable('b1', [1, 500], trainable=1)
         net = tf.nn.leaky_relu(tf.matmul(self.state, w1_s) + tf.matmul(self.action, w1_a) + b1)
-        self.output = tf.layers.dense(net, 1, activation=None, 
-                                      trainable=1, kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001), name='predQ') #kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001),
-        #self.output = tf.squeeze(self.output, name='predQ')
+        dense2 = tf.layers.dense(net, 200, activation=tf.nn.leaky_relu, 
+                                      trainable=1, name='l2_q') 
+        self.output = tf.layers.dense(dense2, 1, activation=None, 
+                                      trainable=1, kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001), name='predQ') 
+        
         
         
         
     def _build_graph_mu(self):
         self.state = tf.placeholder(dtype=tf.float32, shape=(None, self._o_space.shape[0]), name="state")
-        dense1 = tf.layers.dense(inputs=self.state, units=100, activation=tf.nn.leaky_relu, name='l1_mu') #nx100
-        dense2 = tf.layers.dense(inputs=dense1, units=100, activation=tf.nn.leaky_relu, 
+        dense1 = tf.layers.dense(inputs=self.state, units=500, activation=tf.nn.leaky_relu, name='l1_mu') #nx100
+        dense2 = tf.layers.dense(inputs=dense1, units=200, activation=tf.nn.leaky_relu, 
                                  kernel_regularizer=tf.contrib.layers.l2_regularizer(0.001), name='l2_mu')  #nx100
         self.output = tf.layers.dense(inputs=dense2, units=self._action_n, activation=tf.nn.tanh, name='predMu') #nx3
         #self.output = tf.squeeze(self.output, name='predMu') # nx3
@@ -129,10 +133,10 @@ class DDPGAgent(object):
             #"eps_end": 0.05,
             #"eps_decay": 0.99,
             "discount": 0.95,
-            "buffer_size": int(5e4),
-            "batch_size": 64,
-            "learning_rate_a": 1e-4,
-            "learning_rate_c": 1e-4,
+            "buffer_size": int(4e4),
+            "batch_size": 400,
+            "learning_rate_a": 5e-4,
+            "learning_rate_c": 5e-4,
             "theta": 0.01, #soft update rate
             "use_target_net": True,}
         self._config.update(userconfig)
@@ -215,7 +219,6 @@ class DDPGAgent(object):
             As = self._Mu_target.As(s_prime) # + N ?
             y_i = r.reshape(-1, 1) + self._config['discount'] * self._Q_target.Qs(s_prime, As) # * d
             
-
             # optimize the lsq objective
             # critic
             inp = {self._Q.state: s, self._Q.action: a, self._target: y_i}
@@ -253,10 +256,8 @@ class DDPGAgent(object):
 # input rewards nx2
 def plot_reward(reward_stat, start_idx, end_idx):
     plt.plot(np.asarray(reward_stat)[start_idx:end_idx,0], np.asarray(reward_stat)[start_idx:end_idx,1])
-    winning_rate = np.sum(np.asarray(reward_stat)[start_idx:end_idx,1] > 32)
-    fail_rate = np.sum(np.asarray(reward_stat)[start_idx:end_idx,1] < -32)
-    plt.title('DDPG Rewards & winning rate: ' + str(winning_rate) + ' fail rate:' + str(fail_rate))
-    plt.xlabel('episode') 
+    plt.title('DDPG Rewards')
+    plt.xlabel('episode')
     plt.ylabel('score')
     plt.savefig("DDPG_reward.png")
     plt.close()
@@ -265,15 +266,15 @@ def plot_reward(reward_stat, start_idx, end_idx):
 
 
 fps = 100 # env.metadata.get('video.frames_per_second')
-max_steps = 100 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
-n=4 #training frequency (train once in n steps)
+max_steps = 300 #env.spec.tags['wrapper_config.TimeLimit.max_episode_steps']
+n=2 #training frequency (train once in n steps)
 update_f=1 #update frequency (update once in f trainings)
-max_episodes=10000
-start_noise=0.3
-#step=0.00001
-noise_step=start_noise/max_episodes
+max_episodes=5000
+start_noise=0.45
+noise_step=start_noise/max_episodes #step size for the noise
+start_evolution = 1000 #when to start playing against itself
 # In[4]: Start training
-ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.99)
+ddpg_agent = DDPGAgent(o_space, ac_space, discount=0.8)
 
 ## test the outputs
 #ob = env.reset()
@@ -298,19 +299,21 @@ for i in range(max_episodes):
     for t in range(max_steps):
         done = False
         action = ddpg_agent.act(ob)
+        
         # adding noise to action
         a_t = np.clip(np.random.normal(action, start_noise), -1, 1)
-        # first 3000 episodes, opponent does total random actions
-        if i < 1000:
-            a_opp = np.clip(np.random.normal([0, 0, 0], 0.5), -1, 1)
-        # after 3000 episodes it plays against a basic opponent
-        else:
+        # opponent does total random actions
+        #if i < 1000:
+        #    a_opp = np.clip(np.random.normal([0, 0, 0], start_noise), -1, 1)
+        #else:
+        if i < start_evolution:
             a_opp = playerComputer.act(env.obs_agent_two())
-        
+        else:
+            a_opp =  ddpg_agent.act(env.obs_agent_two())
         a = np.hstack([a_t, a_opp])
         (ob_new, reward, done, _info) = env.step(a)
         total_reward+= reward
-
+        
         ddpg_agent.store_transition({'s': ob, 'a': a_t, 'r': reward, 's_prime': ob_new, 'd': done})            
         ob=ob_new        
         if show:
@@ -324,7 +327,7 @@ for i in range(max_episodes):
     stats.append([i,total_reward,t+1])
     #q_agent._eps_scheduler(writer=writer, ep=i)
     if i%1==0: #print frequency
-        print ('episode ', i, 'reward: ', total_reward, 'critic loss: ', loss)
+        print ('episode ', i, 'reward: ', total_reward, 'critic loss: ', loss, 'hits: ', env.combo)
     if i%100==0: # plot each interval of 100
         plot_reward(stats, i-100, i)
 
